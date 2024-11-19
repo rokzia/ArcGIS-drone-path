@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import arcpy
-import numpy as np
 import pathlib
 import json
 import xml.etree.ElementTree as xml
@@ -46,8 +45,14 @@ class Tool:
                 datatype='File',
                 parameterType='Optional',
                 direction='Input'
+            ),
+            arcpy.Parameter(
+                displayName='Minimum altitude',
+                name='minimumAltitude',
+                datatype='Double',
+                parameterType='Optional',
+                direction='Input'
             )
-            
         ]
 
         params[0].value = arcpy.FeatureSet()
@@ -70,50 +75,25 @@ class Tool:
 
     def execute(self, parameters, messages):      
         waypoints = parameters[0].value
-        heightRaster = parameters[1].value
-        waypoint_file = parameters[2].value #Kazkodel value yra geoprocessing objektas o ne tsg string
+        self.raster = arcpy.Raster(parameters[1].valueAsText)
+        waypoint_file = parameters[2].value 
+        self.minimumAltitude = parameters[3].value
 
         array = arcpy.Array()
 
-        if(waypoint_file):
-            file_path = str(waypoint_file)
-            suffixes = pathlib.Path(file_path).suffixes
-            match suffixes[len(suffixes)-1]:
-                case '.csv':
-                    arcpy.AddMessage("csv failas")
-                    for line in open(file_path, 'r'):
-                        pointX, pointY = line.split(';')
-                        array.add(arcpy.Point(pointX, pointY))
-
-                case '.xml':
-                    tree = xml.parse(file_path)
-                    root = tree.getroot()
-                    for point in root.findall('Point'):
-                        array.add(arcpy.Point(int(point.find('x').text), int(point.find('y').text)))
-
-
-                case '.json':
-                    with open(file_path, 'r') as file:
-                        data = json.load(file)
-                    for line in data:
-                        array.add(arcpy.Point(line['x'], line['y']))
-
-                
-                    
-
-
-
-
-
-
         current_map = arcpy.mp.ArcGISProject('CURRENT').activeMap
         spatial_reference = current_map.spatialReference
-        lineFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"Line","POLYLINE", spatial_reference = spatial_reference)
+        lineFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"Line","POLYLINE", spatial_reference = arcpy.SpatialReference(3346))
 
-        if(waypoints):
+    
+        if waypoint_file:
+            self.importFromFile(waypoint_file)
+        elif waypoints:
             with arcpy.da.SearchCursor(waypoints, ["SHAPE@"]) as cursor:
                 for row in cursor:
-                    array.add(arcpy.Point(row[0].centroid.X, row[0].centroid.Y))
+                    point = arcpy.Point(row[0].centroid.X, row[0].centroid.Y)
+                    point.Z = float(arcpy.GetCellValue_management(self.raster,f'{point.X} {point.Y}',None).getOutput(0)) + self.minimumAltitude
+                    array.add(point)
 
         Line = arcpy.Polyline(array, spatial_reference = spatial_reference)
 
@@ -129,3 +109,37 @@ class Tool:
         """This method takes place after outputs are processed and
         added to the display."""
         return
+
+    def importFromFile(self, file) -> arcpy.Array:
+        array = arcpy.Array()
+        suffixes = pathlib.Path(file).suffixes
+        match suffixes[len(suffixes)-1]:
+            case '.csv':
+                arcpy.AddMessage("csv failas")
+                for line in open(file, 'r'):
+                    pointX, pointY, pointZ = line.split(';')
+                    if pointZ > float(arcpy.GetCellValue_management(self.raster,f'{pointX} {pointY}',None).getOutput(0)) + self.minimumAltitude:
+                        array.add(arcpy.Point(pointX, pointY, pointZ))
+                    else:
+                        arcpy.AddMessage("Point is too low")
+
+            case '.xml':
+                tree = xml.parse(file)
+                root = tree.getroot()
+                for point in root.findall('Point'):
+                    x, y, z = float(point.find('x').text), float(point.find('y').text), float(point.find('z').text)
+                    if z > float(arcpy.GetCellValue_management(self.raster,f'{x} {y}',None).getOutput(0)) + self.minimumAltitude:
+                        array.add(arcpy.Point(x, y, z))
+                    else:
+                        arcpy.AddMessage("Point is too low")
+
+
+            case '.json':
+                with open(file, 'r') as file:
+                    data = json.load(file)
+                for line in data:
+                    if line['z'] > float(arcpy.GetCellValue_management(self.raster,f'{line['x']} {line['y']}',None).getOutput(0)) + self.minimumAltitude:
+                        array.add(arcpy.Point(line['x'], line['y'], line['z']))
+                    else:
+                        arcpy.AddMessage("Point is too low")
+        
