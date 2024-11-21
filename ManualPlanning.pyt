@@ -82,8 +82,8 @@ class Tool:
         array = arcpy.Array()
 
         current_map = arcpy.mp.ArcGISProject('CURRENT').activeMap
-        spatial_reference = current_map.spatialReference
-        lineFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"Line","POLYLINE", spatial_reference = arcpy.SpatialReference(3346))
+        spatial_reference = arcpy.SpatialReference(3346)
+        lineFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"Line","POLYLINE", spatial_reference = spatial_reference)
 
     
         if waypoint_file:
@@ -138,7 +138,7 @@ class Tool:
                 with open(file, 'r') as file:
                     data = json.load(file)
                 for line in data:
-                    if line['z'] > float(arcpy.GetCellValue_management(self.raster,f'{line['x']} {line['y']}',None).getOutput(0)) + self.minimumAltitude:
+                    if line['z'] > float(arcpy.GetCellValue_management(self.raster,f"{line['x']} {line['y']}",None).getOutput(0)) + self.minimumAltitude:
                         array.add(arcpy.Point(line['x'], line['y'], line['z']))
                     else:
                         arcpy.AddMessage("Point is too low")
