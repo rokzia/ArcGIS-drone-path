@@ -4,6 +4,7 @@ import arcpy
 import pathlib
 import json
 import xml.etree.ElementTree as xml
+import numpy as np
 
 class Toolbox:
     def __init__(self):
@@ -36,7 +37,14 @@ class Tool:
                 displayName='Height raster',
                 name='height_raster',
                 datatype='Raster Layer',
-                parameterType='Optional',
+                parameterType='Required',
+                direction='Input'
+            ),
+            arcpy.Parameter(
+                displayName='Radar Prediction',
+                name='radar_raster',
+                datatype='Raster Layer',
+                parameterType='Required',
                 direction='Input'
             ),
             arcpy.Parameter(
@@ -50,7 +58,7 @@ class Tool:
                 displayName='Minimum altitude',
                 name='minimumAltitude',
                 datatype='Double',
-                parameterType='Optional',
+                parameterType='Required',
                 direction='Input'
             )
         ]
@@ -75,24 +83,26 @@ class Tool:
 
     def execute(self, parameters, messages):      
         waypoints = parameters[0].value
-        self.raster = arcpy.Raster(parameters[1].valueAsText)
-        waypoint_file = parameters[2].value 
-        self.minimumAltitude = parameters[3].value
+        self.height = arcpy.Raster(parameters[1].valueAsText)
+        self.radar = arcpy.Raster(parameters[2].valueAsText)
+        waypoint_file = parameters[3].value 
+        self.minimumAltitude = parameters[4].value
 
         array = arcpy.Array()
 
         current_map = arcpy.mp.ArcGISProject('CURRENT').activeMap
         spatial_reference = arcpy.SpatialReference(3346)
         lineFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"Line","POLYLINE", spatial_reference = spatial_reference)
+        pointFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"Points","POINT", spatial_reference = spatial_reference)
+        #arcpy.AddField_management('Points', 'Probability of detection', 'FLOAT') neveikia kazkodel
 
-    
         if waypoint_file:
-            self.importFromFile(waypoint_file)
+            array = self.importFromFile(waypoint_file)
         elif waypoints:
             with arcpy.da.SearchCursor(waypoints, ["SHAPE@"]) as cursor:
                 for row in cursor:
                     point = arcpy.Point(row[0].centroid.X, row[0].centroid.Y)
-                    point.Z = float(arcpy.GetCellValue_management(self.raster,f'{point.X} {point.Y}',None).getOutput(0)) + self.minimumAltitude
+                    point.Z = self.getHeightValue(point.X, point.Y) + self.minimumAltitude
                     array.add(point)
 
         Line = arcpy.Polyline(array, spatial_reference = spatial_reference)
@@ -118,7 +128,7 @@ class Tool:
                 arcpy.AddMessage("csv failas")
                 for line in open(file, 'r'):
                     pointX, pointY, pointZ = line.split(';')
-                    if pointZ > float(arcpy.GetCellValue_management(self.raster,f'{pointX} {pointY}',None).getOutput(0)) + self.minimumAltitude:
+                    if pointZ > self.getHeightValue(pointX, pointY) + self.minimumAltitude:
                         array.add(arcpy.Point(pointX, pointY, pointZ))
                     else:
                         arcpy.AddMessage("Point is too low")
@@ -128,7 +138,7 @@ class Tool:
                 root = tree.getroot()
                 for point in root.findall('Point'):
                     x, y, z = float(point.find('x').text), float(point.find('y').text), float(point.find('z').text)
-                    if z > float(arcpy.GetCellValue_management(self.raster,f'{x} {y}',None).getOutput(0)) + self.minimumAltitude:
+                    if z > self.getHeightValue(float(point.find('x').text), float(point.find('y').text)) + self.minimumAltitude:
                         array.add(arcpy.Point(x, y, z))
                     else:
                         arcpy.AddMessage("Point is too low")
@@ -138,8 +148,21 @@ class Tool:
                 with open(file, 'r') as file:
                     data = json.load(file)
                 for line in data:
-                    if line['z'] > float(arcpy.GetCellValue_management(self.raster,f"{line['x']} {line['y']}",None).getOutput(0)) + self.minimumAltitude:
+                    if line['z'] > self.getHeightValue(line['x'], line['y']) + self.minimumAltitude:
                         array.add(arcpy.Point(line['x'], line['y'], line['z']))
                     else:
                         arcpy.AddMessage("Point is too low")
+
+        return array
         
+    def signalToNoiseRatio(power, amplification, waveLength, rcs, distance):
+        return (power * amplification**2 * waveLength**2 * rcs) / ((4 * np.pi)**3 * distance**4)
+    
+    def probabilityOfDetection(SignalToNoise, step=10):
+        return 1 - np.exp(-SignalToNoise / step)
+    
+    def getHeightValue(self, x, y):
+        return float(arcpy.GetCellValue_management(self.height,f'{x} {y}',None).getOutput(0))
+    
+    def getRadarValue(self, x, y):
+        return float(arcpy.GetCellValue_management(self.radar,f'{x} {y}',None).getOutput(0))
