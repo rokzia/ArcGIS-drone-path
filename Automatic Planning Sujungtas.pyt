@@ -229,7 +229,7 @@ class Tool:
                 continue
             visited.add(current)
 
-            if current == end or current.h<100:
+            if current == end or current.h<10:
                 # Reconstruct path
                 path = []
                 path.append(end)
