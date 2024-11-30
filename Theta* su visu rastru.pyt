@@ -84,7 +84,7 @@ class Tool:
 
 
         boolArray, startIndexes, endIndexes = self.createBoolArray(startPoint, endPoint)
-        path = a_star(boolArray, startIndexes, endIndexes)
+        path = theta_star(boolArray, startIndexes, endIndexes)
 
         if path is None:
             arcpy.AddMessage("No path found")
@@ -120,19 +120,22 @@ class Tool:
     
     def createPointArray(self, start: arcpy.Point, path: list, startIndexes):
         pointArray = arcpy.Array()
-        tempPoint = copy.copy(start)
+        pointArray.add(start)
+        tempX = start.X
+        tempY = start.Y
         prevY, prevX = startIndexes
         for i in range(len(path)):
             y, x = path[i]
-            if y - prevY == 1: #down
-                tempPoint = arcpy.Point(tempPoint.X, tempPoint.Y - self.resolution)
-            elif y - prevY == -1: #up
-                tempPoint = arcpy.Point(tempPoint.X, tempPoint.Y + self.resolution)
-            elif x - prevX == 1: #right
-                tempPoint = arcpy.Point(tempPoint.X + self.resolution, tempPoint.Y)
-            elif x - prevX == -1: #left
-                tempPoint = arcpy.Point(tempPoint.X - self.resolution, tempPoint.Y)
-            arcpy.AddMessage(f'{tempPoint.X} {tempPoint.Y}')
+            if y - prevY >= 1: #down
+                tempY -= self.resolution * (y - prevY)
+            elif y - prevY <= -1: #up
+                tempY += self.resolution * abs((y - prevY))
+            if x - prevX >= 1: #right
+                tempX += self.resolution * (x - prevX)
+            elif x - prevX <= -1: #left
+                tempX -= self.resolution * abs((x - prevX))
+
+            tempPoint = arcpy.Point(tempX,tempY)
             pointArray.add(tempPoint)
             prevY, prevX = path[i]
         
@@ -149,11 +152,11 @@ class Tool:
 
         return row, col
 
-def a_star(grid, start, end):
+def theta_star(grid, start, end):
     rows, cols = grid.shape
     open_set = []
-    heapq.heappush(open_set, (0, start))  # (f, node)
-    came_from = {}
+    heapq.heappush(open_set, (heuristic(start,end), start))  # (f, node)
+    came_from = {start: start}
     g_score = {start: 0}
     f_score = {start: heuristic(start, end)}
     visited = set()
@@ -170,7 +173,7 @@ def a_star(grid, start, end):
         if current == end:
             # Reconstruct path
             path = []
-            while current in came_from:
+            while current != came_from[current]:
                 path.append(current)
                 current = came_from[current]
             return path[::-1]
@@ -188,17 +191,66 @@ def a_star(grid, start, end):
                 not grid[neighbor] and
                 neighbor not in visited
             ):
-                tentative_g_score = g_score[current] + 1
-                if tentative_g_score < g_score.get(neighbor, float('inf')):
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g_score
-                    f_score[neighbor] = tentative_g_score + heuristic(neighbor, end)
-                    heapq.heappush(open_set, (f_score[neighbor], neighbor))
+                if neighbor not in open_set:
+                    g_score[neighbor] = float('inf')
+                    came_from[neighbor] = None
+                update_vertex(current,neighbor,g_score,came_from,open_set,end,grid, f_score)
 
     return None  # No path found
 
+def update_vertex(current, neighbor, g_score, parent, open_set, finish, grid, f_score):
+    if line_of_sight(parent[current], neighbor, grid):
+        new_g = g_score[parent[current]] + 1
+        if new_g < g_score[neighbor]:
+            g_score[neighbor] = new_g
+            f_score[neighbor] = new_g + heuristic(neighbor,finish)
+            parent[neighbor] = parent[current]
+            if neighbor in open_set:
+                open_set.remove(neighbor)
+            heapq.heappush(open_set, (f_score[neighbor], neighbor))
+    else:
+        new_g = g_score[current] + 1
+        if new_g < g_score[neighbor]:
+            g_score[neighbor] = new_g
+            f_score[neighbor] = new_g + heuristic(neighbor,finish)
+            parent[neighbor] = current
+            if neighbor in open_set:
+                open_set.remove(neighbor)
+            heapq.heappush(open_set, (f_score[neighbor], neighbor))
 
-    
+def line_of_sight(point1, point2, grid):
+
+    x0, y0 = point1
+    x1, y1 = point2
+
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+
+    sX = 1 if x1 > x0 else -1
+    sY = 1 if y1 > y0 else -1
+
+    if dx > dy:
+        err = dx / 2
+        while x0 != x1:
+            if grid[(x0, y0)]:
+                return False
+            err -= dy
+            if err < 0:
+                y0 += sY
+                err += dx
+            x0 += sX
+    else:
+        err = dy / 2
+        while y0 != y1:
+            if grid[(x0, y0)]:
+                return False
+            err -= dx
+            if err < 0:
+                x0 += sX
+                err += dy
+            y0 += sY
+    return True
+
 def heuristic(a, b):
 # Manhattan distance
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
