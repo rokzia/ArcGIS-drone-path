@@ -27,16 +27,9 @@ class Tool:
         """Define the tool parameters."""
         params = [
             arcpy.Parameter(
-                displayName='Start point',
-                name='start',
-                datatype='Point',
-                parameterType='Optional',
-                direction='Input'
-            ),
-            arcpy.Parameter(
-                displayName='End point',
-                name='end',
-                datatype='Point',
+                displayName='Waypoints',
+                name='waypoints',
+                datatype='GPFeatureRecordSetLayer',
                 parameterType='Optional',
                 direction='Input'
             ),  
@@ -46,14 +39,8 @@ class Tool:
                 datatype='Raster Layer',
                 parameterType='Required',
                 direction='Input'
-            ),    
-            arcpy.Parameter(
-                displayName='Prediction resolution',
-                name='radar_resolution',
-                datatype='GPLong',
-                parameterType='Required',
-                direction='Input'
-            ),    
+            )
+
         ]
         return params
 
@@ -73,32 +60,32 @@ class Tool:
         return
 
     def execute(self, parameters, messages):
-        startTemporary = [float(x.replace(',', '.')) for x in parameters[0].valueAsText.split(' ')]
-        startPoint = arcpy.Point(startTemporary[0], startTemporary[1])
+        waypoints = parameters[0].value
+        tempArr = []
+        with arcpy.da.SearchCursor(waypoints, ["SHAPE@"]) as cursor:
+            for row in cursor:
+                point = arcpy.Point(row[0].centroid.X, row[0].centroid.Y)
+                tempArr.append(point)
 
-        endTemporary = [float(x.replace(',', '.')) for x in parameters[1].valueAsText.split(' ')]
-        endPoint = arcpy.Point(endTemporary[0], endTemporary[1])
 
-        self.raster = arcpy.Raster(parameters[2].valueAsText)
-        self.resolution = parameters[3].value
-
+        
+        self.radar = arcpy.Raster(parameters[1].valueAsText)
+        self.resolution = self.radar.meanCellWidth
         pointArray = arcpy.Array()
 
         #konfiguracija
         current_map = arcpy.mp.ArcGISProject('CURRENT').activeMap
-        spatial_reference = arcpy.SpatialReference(3346)
+        spatial_reference = current_map.spatialReference
         lineFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"Line","POLYLINE", spatial_reference = spatial_reference)
         pointFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"Points","POINT", spatial_reference = spatial_reference)
 
-        
+        startPoint = tempArr[0]
+        endPoint = tempArr[1]
 
 
         boolArray, startIndexes, endIndexes = self.createBoolArray(startPoint, endPoint)
-        arcpy.AddMessage(boolArray)
-        arcpy.AddMessage(startIndexes)
-        arcpy.AddMessage(endIndexes)
+        path = theta_star(boolArray, startIndexes, endIndexes)
 
-        path = a_star(boolArray, startIndexes, endIndexes)
         if path is None:
             arcpy.AddMessage("No path found")
             return
@@ -125,87 +112,51 @@ class Tool:
         return
     
 
-    def createBoolArray(self, start: arcpy.Point, end: arcpy.Point):
-        start = snapPointToRasterCenter(self, start)
-        end = snapPointToRasterCenter(self, end)
-        width = abs(start.X - end.X)
-        arcpy.AddMessage(f'Width: {width}')
-        height = abs(start.Y - end.Y)
-        arcpy.AddMessage(f'Height: {height}')
-        numberOfColumns = math.ceil(width / self.resolution) + 1
-        arcpy.AddMessage(f'Number of columns: {numberOfColumns}')
-        numberOfRows = math.ceil(height / self.resolution) + 1
-        testArray = arcpy.RasterToNumPyArray(self.raster, start, numberOfColumns, numberOfRows)
-        arcpy.AddMessage(testArray)
-        arcpy.AddMessage(f'Number of rows: {numberOfRows}')
-        paddingColumns = math.ceil(width / self.resolution)
-        arcpy.AddMessage(f'Padding columns: {paddingColumns}')
-        paddingRows = math.ceil(height / self.resolution)
-        arcpy.AddMessage(f'Padding rows: {paddingRows}')
-        numberOfColumns += paddingColumns * 2
-        numberOfRows += paddingRows * 2
-
-        # compute start and end point indexes for further calculations
-        if start.X < end.X and start.Y < end.Y: # from bottom left to top right
-            newStart = arcpy.Point(start.X - paddingColumns * self.resolution, start.Y - paddingRows * self.resolution)
-            newEnd = arcpy.Point(end.X + paddingColumns * self.resolution, end.Y + paddingRows * self.resolution)
-            originalStartIndex = (numberOfRows - paddingRows - 1, paddingColumns)
-            originalEndIndex = (paddingRows, numberOfColumns - paddingColumns - 1)
-            startArray = arcpy.RasterToNumPyArray(self.raster, newStart, numberOfColumns, numberOfRows)
-        elif start.X < end.X and start.Y > end.Y: # from top left to bottom right
-            newStart = arcpy.Point(start.X - paddingColumns * self.resolution, start.Y + paddingRows * self.resolution)
-            newEnd = arcpy.Point(end.X + paddingColumns * self.resolution, end.Y - paddingRows * self.resolution)
-            originalStartIndex = (paddingRows, paddingColumns)
-            originalEndIndex = (numberOfRows - paddingRows - 1, numberOfColumns - paddingColumns - 1)
-            startArray = arcpy.RasterToNumPyArray(self.raster, arcpy.Point(newStart.X, newEnd.Y), numberOfColumns, numberOfRows)
-        elif start.X > end.X and start.Y > end.Y: # from top right to bottom left
-            newEnd = arcpy.Point(end.X - paddingColumns * self.resolution, end.Y - paddingRows * self.resolution)
-            originalStartIndex = (paddingRows, numberOfColumns - paddingColumns - 1)
-            originalEndIndex = (numberOfRows - paddingRows - 1, paddingColumns)
-            startArray = arcpy.RasterToNumPyArray(self.raster, newEnd, numberOfColumns, numberOfRows)
-        else: # from bottom right to top left
-            newStart = arcpy.Point(start.X + paddingColumns * self.resolution, start.Y - paddingRows * self.resolution)
-            newEnd = arcpy.Point(end.X - paddingColumns * self.resolution, end.Y + paddingRows * self.resolution)
-            originalStartIndex = (numberOfRows - paddingRows - 1, numberOfColumns - paddingColumns - 1)
-            originalEndIndex = (paddingRows, paddingColumns)
-            startArray = arcpy.RasterToNumPyArray(self.raster, arcpy.Point(newEnd.X, newStart.Y), numberOfColumns, numberOfRows)
-        
-
-        
-
-        return startArray > -110, originalStartIndex, originalEndIndex
+    def createBoolArray(self, start, end):
+        array = arcpy.RasterToNumPyArray(self.radar, nodata_to_value=-200)
+        startIndex = self.snapPointToRasterCenter(start)
+        endIndex = self.snapPointToRasterCenter(end)
+        return array>-110, startIndex, endIndex
     
     def createPointArray(self, start: arcpy.Point, path: list, startIndexes):
         pointArray = arcpy.Array()
-        tempPoint = copy.copy(start)
         pointArray.add(start)
+        tempX = start.X
+        tempY = start.Y
         prevY, prevX = startIndexes
         for i in range(len(path)):
             y, x = path[i]
-            if y - prevY == 1: #down
-                tempPoint = arcpy.Point(tempPoint.X, tempPoint.Y - self.resolution)
-            elif y - prevY == -1: #up
-                tempPoint = arcpy.Point(tempPoint.X, tempPoint.Y + self.resolution)
-            elif x - prevX == 1: #right
-                tempPoint = arcpy.Point(tempPoint.X + self.resolution, tempPoint.Y)
-            elif x - prevX == -1: #left
-                tempPoint = arcpy.Point(tempPoint.X - self.resolution, tempPoint.Y)
-            
+            if y - prevY >= 1: #down
+                tempY -= self.resolution * (y - prevY)
+            elif y - prevY <= -1: #up
+                tempY += self.resolution * abs((y - prevY))
+            if x - prevX >= 1: #right
+                tempX += self.resolution * (x - prevX)
+            elif x - prevX <= -1: #left
+                tempX -= self.resolution * abs((x - prevX))
+
+            tempPoint = arcpy.Point(tempX,tempY)
             pointArray.add(tempPoint)
             prevY, prevX = path[i]
         
         return pointArray
 
+    def snapPointToRasterCenter(self, point: arcpy.Point):
+        rasterOriginX = self.radar.extent.XMin
+        rasterOriginY = self.radar.extent.YMax 
+        
 
-def heuristic(a, b):
-    # Manhattan distance
-    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+        col = int((point.X - rasterOriginX) / self.resolution)
+        row = int((rasterOriginY - point.Y) / self.resolution)
+        
 
-def a_star(grid, start, end):
+        return row, col
+
+def theta_star(grid, start, end):
     rows, cols = grid.shape
     open_set = []
-    heapq.heappush(open_set, (0, start))  # (f, node)
-    came_from = {}
+    heapq.heappush(open_set, (heuristic(start,end), start))  # (f, node)
+    came_from = {start: start}
     g_score = {start: 0}
     f_score = {start: heuristic(start, end)}
     visited = set()
@@ -217,10 +168,12 @@ def a_star(grid, start, end):
             continue
         visited.add(current)
 
+
+
         if current == end:
             # Reconstruct path
             path = []
-            while current in came_from:
+            while current != came_from[current]:
                 path.append(current)
                 current = came_from[current]
             return path[::-1]
@@ -231,28 +184,73 @@ def a_star(grid, start, end):
             for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
         ]
         for neighbor in neighbors:
+
             if (
                 0 <= neighbor[0] < rows and
                 0 <= neighbor[1] < cols and
                 not grid[neighbor] and
                 neighbor not in visited
             ):
-                tentative_g_score = g_score[current] + 1
-                if tentative_g_score < g_score.get(neighbor, float('inf')):
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g_score
-                    f_score[neighbor] = tentative_g_score + heuristic(neighbor, end)
-                    heapq.heappush(open_set, (f_score[neighbor], neighbor))
+                if neighbor not in open_set:
+                    g_score[neighbor] = float('inf')
+                    came_from[neighbor] = None
+                update_vertex(current,neighbor,g_score,came_from,open_set,end,grid, f_score)
 
     return None  # No path found
 
-def snapPointToRasterCenter(self, point: arcpy.Point):
-    #lower left corner of raster
-    rasterOriginX, rasterOriginY = self.raster.extent.XMin, self.raster.extent.YMax
-    #cell indexes of start point
-    col = int((point.X - rasterOriginX) / self.resolution)
-    row = int((rasterOriginY - point.Y) / self.resolution)
-    snapped_x = rasterOriginX + col * self.resolution + self.resolution / 2 - 100
-    snapped_y = rasterOriginY - row * self.resolution - self.resolution / 2 - 100
+def update_vertex(current, neighbor, g_score, parent, open_set, finish, grid, f_score):
+    if line_of_sight(parent[current], neighbor, grid):
+        new_g = g_score[parent[current]] + 1
+        if new_g < g_score[neighbor]:
+            g_score[neighbor] = new_g
+            f_score[neighbor] = new_g + heuristic(neighbor,finish)
+            parent[neighbor] = parent[current]
+            if neighbor in open_set:
+                open_set.remove(neighbor)
+            heapq.heappush(open_set, (f_score[neighbor], neighbor))
+    else:
+        new_g = g_score[current] + 1
+        if new_g < g_score[neighbor]:
+            g_score[neighbor] = new_g
+            f_score[neighbor] = new_g + heuristic(neighbor,finish)
+            parent[neighbor] = current
+            if neighbor in open_set:
+                open_set.remove(neighbor)
+            heapq.heappush(open_set, (f_score[neighbor], neighbor))
 
-    return arcpy.Point(snapped_x, snapped_y)
+def line_of_sight(point1, point2, grid):
+
+    x0, y0 = point1
+    x1, y1 = point2
+
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+
+    sX = 1 if x1 > x0 else -1
+    sY = 1 if y1 > y0 else -1
+
+    if dx > dy:
+        err = dx / 2
+        while x0 != x1:
+            if grid[(x0, y0)]:
+                return False
+            err -= dy
+            if err < 0:
+                y0 += sY
+                err += dx
+            x0 += sX
+    else:
+        err = dy / 2
+        while y0 != y1:
+            if grid[(x0, y0)]:
+                return False
+            err -= dx
+            if err < 0:
+                x0 += sX
+                err += dy
+            y0 += sY
+    return True
+
+def heuristic(a, b):
+# Manhattan distance
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
