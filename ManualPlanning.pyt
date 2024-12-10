@@ -6,6 +6,7 @@ import json
 import xml.etree.ElementTree as xml
 import numpy as np
 import heapq
+from math import sqrt, ceil
 
 class Toolbox:
     def __init__(self):
@@ -49,6 +50,13 @@ class Tool:
                 direction='Input'
             ),
             arcpy.Parameter(
+                displayName='Drone speed (m/s)',
+                name='droneSpeed',
+                datatype='GPDouble',
+                parameterType='Required',
+                direction='Input'
+            ),
+            arcpy.Parameter(
                 displayName='Draw auto route',
                 name='drawAutoRoute',
                 datatype='GPBoolean',
@@ -79,7 +87,8 @@ class Tool:
         waypoints = parameters[0].value
         self.radar = arcpy.Raster(parameters[1].valueAsText)
         waypoint_file = parameters[2].value 
-        drawAutoRoute = parameters[3].value
+        droneSpeed = parameters[3].value
+        drawAutoRoute = parameters[4].value
 
         self.resolution = self.radar.meanCellWidth
 
@@ -110,6 +119,8 @@ class Tool:
 
         current_map.addDataFromPath(lineFeatureClass)
         current_map.addDataFromPath(pointFeatureClass)
+
+        self.writeMetricsMessages("Manual route metrics:", *self.calculateRouteMetrics(array, self.radar, droneSpeed, self.resolution))
         #Manual planning end
         if drawAutoRoute:
             #Insert auto planning route as well
@@ -125,8 +136,6 @@ class Tool:
             if path is None:
                 arcpy.AddMessage("No path found")
                 return
-            else:
-                arcpy.AddMessage(path)
 
             array = self.createPointArray(startPoint, path, startIndexes)
 
@@ -141,6 +150,8 @@ class Tool:
 
             current_map.addDataFromPath(lineFeatureClass)
             current_map.addDataFromPath(pointFeatureClass)
+
+            self.writeMetricsMessages("Auto route metrics:", *self.calculateRouteMetrics(array, self.radar, droneSpeed, self.resolution))
 
         return
 
@@ -197,11 +208,14 @@ class Tool:
     def getRadarValue(self, x, y):
         return float(arcpy.GetCellValue_management(self.radar,f'{x} {y}',None).getOutput(0))
     
+    def isInSignal(self, x, y):
+        return self.radar[*self.snapPointToRasterCenter(arcpy.Point(x, y))] > -110
+    
     def createBoolArray(self, start, end):
         array = arcpy.RasterToNumPyArray(self.radar, nodata_to_value=-200)
         startIndex = self.snapPointToRasterCenter(start)
         endIndex = self.snapPointToRasterCenter(end)
-        return array>-110, startIndex, endIndex
+        return array > -110, startIndex, endIndex
     
     def createPointArray(self, start: arcpy.Point, path: list, startIndexes):
         pointArray = arcpy.Array()
@@ -234,6 +248,39 @@ class Tool:
         row = int((rasterOriginY - point.Y) / self.resolution)
         
         return row, col
+    
+    #drone speed in meters per second
+    def calculateRouteMetrics(self, pointArray: arcpy.Array, raster: arcpy.Raster, droneSpeed: float, samplingInterval: int):
+        totalDistanceInSignal = 0
+        totalTimeInSignal = 0
+        signalCrossings = 0
+        previousInSignal = None
+
+        for i in range(len(pointArray) - 1):
+            x1, y1 = pointArray[i].X, pointArray[i].Y
+            x2, y2 = pointArray[i + 1].X, pointArray[i + 1].Y
+
+            points = interpolatePoints((x1, y1), (x2, y2), samplingInterval)
+
+            for x, y in points:
+                inSignal = self.isInSignal(x, y)
+
+                if previousInSignal is not None and previousInSignal != inSignal:
+                    signalCrossings += 1
+
+                if inSignal:
+                    totalDistanceInSignal += samplingInterval
+
+                previousInSignal = inSignal
+        
+        totalTimeInSignal = totalDistanceInSignal / droneSpeed
+        return totalDistanceInSignal, totalTimeInSignal, signalCrossings
+    
+    def writeMetricsMessages(self, header: str, totalDistanceInSignal, totalTimeInSignal, signalCrossings):
+        arcpy.AddMessage(header)
+        arcpy.AddMessage(f"Total distance in signal: {totalDistanceInSignal} m")
+        arcpy.AddMessage(f"Total time in signal: {totalTimeInSignal} s")
+        arcpy.AddMessage(f"Signal crossings: {signalCrossings}")
 
 def theta_star(grid, start, end):
     rows, cols = grid.shape
@@ -335,4 +382,19 @@ def line_of_sight(point1, point2, grid):
 def heuristic(a, b):
 # Manhattan distance
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+def interpolatePoints(point1, point2, interval: int):
+    x1, y1 = point1
+    x2, y2 = point2
+    distance = sqrt((x2 - x1)**2 + (y2 - y1)**2)
+    numSamples = ceil(distance / interval)
+    points = [
+        (
+            x1 + (x2 - x1) * i / numSamples,
+            y1 + (y2 - y1) * i / numSamples
+        )
+        for i in range(1, numSamples + 1)
+    ]
+    return points
+
 
