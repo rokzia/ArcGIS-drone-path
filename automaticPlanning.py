@@ -5,6 +5,7 @@ import numpy as np
 import math
 import heapq
 import copy
+from math import sqrt, ceil
 
 class Toolbox:
     def __init__(self):
@@ -39,6 +40,13 @@ class Tool:
                 datatype='Raster Layer',
                 parameterType='Required',
                 direction='Input'
+            ),
+            arcpy.Parameter(
+                displayName='Drone speed',
+                name='droneSpeed',
+                datatype='GPDouble',
+                parameterType='Required',
+                direction='Input'
             )
 
         ]
@@ -67,10 +75,11 @@ class Tool:
                 point = arcpy.Point(row[0].centroid.X, row[0].centroid.Y)
                 tempArr.append(point)
 
-
-        
         self.radar = arcpy.Raster(parameters[1].valueAsText)
         self.resolution = self.radar.meanCellWidth
+
+        droneSpeed = parameters[2].value
+
         pointArray = arcpy.Array()
 
         #konfiguracija
@@ -105,6 +114,9 @@ class Tool:
 
         current_map.addDataFromPath(lineFeatureClass)
         current_map.addDataFromPath(pointFeatureClass)
+
+        self.writeMetricsMessages("Metrics for the path:", *self.calculateRouteMetrics(pointArray, radarValues, droneSpeed, self.resolution))
+
         return
 
     def postExecute(self, parameters):
@@ -118,6 +130,9 @@ class Tool:
         startIndex = self.snapPointToRasterCenter(start)
         endIndex = self.snapPointToRasterCenter(end)
         return array, startIndex, endIndex
+    
+    def isInSignal(self, x, y):
+        return self.radar[*self.snapPointToRasterCenter(arcpy.Point(x, y))] > -110
     
     def createPointArray(self, start: arcpy.Point, path: list, startIndexes):
         pointArray = arcpy.Array()
@@ -152,6 +167,39 @@ class Tool:
         
 
         return row, col
+    
+    #drone speed in meters per second
+    def calculateRouteMetrics(self, pointArray: arcpy.Array, raster: arcpy.Raster, droneSpeed: float, samplingInterval: int):
+        totalDistanceInSignal = 0
+        totalTimeInSignal = 0
+        signalCrossings = 0
+        previousInSignal = None
+
+        for i in range(len(pointArray) - 1):
+            x1, y1 = pointArray[i].X, pointArray[i].Y
+            x2, y2 = pointArray[i + 1].X, pointArray[i + 1].Y
+
+            points = interpolatePoints((x1, y1), (x2, y2), samplingInterval)
+
+            for x, y in points:
+                inSignal = self.isInSignal(x, y)
+
+                if previousInSignal is not None and previousInSignal != inSignal:
+                    signalCrossings += 1
+
+                if inSignal:
+                    totalDistanceInSignal += samplingInterval
+
+                previousInSignal = inSignal
+        
+        totalTimeInSignal = totalDistanceInSignal / droneSpeed
+        return totalDistanceInSignal, totalTimeInSignal, signalCrossings
+    
+    def writeMetricsMessages(self, header: str, totalDistanceInSignal, totalTimeInSignal, signalCrossings):
+        arcpy.AddMessage(header)
+        arcpy.AddMessage(f"Total distance in signal: {totalDistanceInSignal} m")
+        arcpy.AddMessage(f"Total time in signal: {totalTimeInSignal} s")
+        arcpy.AddMessage(f"Signal crossings: {signalCrossings}")
 
 def theta_star(grid, start, end, weight):
     rows, cols = grid.shape
@@ -268,4 +316,16 @@ def manhattan(a,b):
 def detectionCost(fieldStrength):
     return (fieldStrength+200)/200
 
-
+def interpolatePoints(point1, point2, interval: int):
+    x1, y1 = point1
+    x2, y2 = point2
+    distance = sqrt((x2 - x1)**2 + (y2 - y1)**2)
+    numSamples = ceil(distance / interval)
+    points = [
+        (
+            x1 + (x2 - x1) * i / numSamples,
+            y1 + (y2 - y1) * i / numSamples
+        )
+        for i in range(1, numSamples + 1)
+    ]
+    return points
