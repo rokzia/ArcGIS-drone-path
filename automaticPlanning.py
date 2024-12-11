@@ -115,7 +115,7 @@ class Tool:
         current_map.addDataFromPath(lineFeatureClass)
         current_map.addDataFromPath(pointFeatureClass)
 
-        self.writeMetricsMessages("Metrics for the path:", *self.calculateRouteMetrics(pointArray, radarValues, droneSpeed, self.resolution))
+        self.writeMetricsMessages("Metrics for the path:", *self.calculateRouteMetrics(radarValues, line, droneSpeed, self.resolution))
 
         return
 
@@ -141,10 +141,11 @@ class Tool:
 
         pointArray = arcpy.Array()
         pointArray.add(start)
-        arcpy.AddMessage(f"pries {(start.X, start.Y)}, checkas {(int((start.X - rasterOriginX) / self.resolution), int((start.Y - rasterOriginY) / self.resolution))}")
+        
+        #Setting starting coordinates to be in the center of raster cell
         tempX = ((int((start.X - rasterOriginX) / self.resolution) + 0.5) * self.resolution) + rasterOriginX
         tempY = ((int((start.Y - rasterOriginY) / self.resolution) + 0.5) * self.resolution) + rasterOriginY
-        arcpy.AddMessage(f"po {(tempX, tempY)}, checkas {(int((tempX - rasterOriginX) / self.resolution), int((tempY - rasterOriginY) / self.resolution))}")
+
         # pointArray.add(arcpy.Point(tempX,tempY))
         prevY, prevX = startIndexes
         for i in range(len(path)):
@@ -176,32 +177,31 @@ class Tool:
         return row, col
     
     #drone speed in meters per second
-    def calculateRouteMetrics(self, pointArray: arcpy.Array, raster: arcpy.Raster, droneSpeed: float, samplingInterval: int):
+    def calculateRouteMetrics(self, radarValues: arcpy.Array, path: arcpy.Polyline, droneSpeed: float, samplingInterval: int):
+        
+        
+        
         totalDistanceInSignal = 0
         totalTimeInSignal = 0
         signalCrossings = 0
-        previousInSignal = None
 
-        for i in range(len(pointArray) - 1):
-            x1, y1 = pointArray[i].X, pointArray[i].Y
-            x2, y2 = pointArray[i + 1].X, pointArray[i + 1].Y
+        tempRaster = arcpy.sa.Remap(self.radar, [-200,101],[0])
+        tempPolygon = arcpy.conversion.RasterToPolygon(tempRaster, 'tempPolygon' ,False)
+        intersectLines = arcpy.analysis.Intersect([tempPolygon,path],'Line_test')
+        with arcpy.da.SearchCursor(intersectLines, ["SHAPE@", "Shape_Length"]) as cursor:
+            for row in cursor:
+                totalDistanceInSignal+=row[1]
 
-            points = interpolatePoints((x1, y1), (x2, y2), samplingInterval)
 
-            for x, y in points:
-                inSignal = self.isInSignal(x, y)
+        lineStartPoints = arcpy.management.FeatureVerticesToPoints(intersectLines,'point_test', 'START')
+        signalCrossings = arcpy.management.GetCount(lineStartPoints)
+        # with arcpy.da.SearchCursor(lineStartPoints, ["SHAPE@"]) as cursor:
+        #     for row in cursor:
+        #         signalCrossings+=1
 
-                if previousInSignal is not None and previousInSignal != inSignal:
-                    signalCrossings += 1
+        totalTimeInSignal = totalDistanceInSignal/droneSpeed
 
-                if inSignal:
-                    totalDistanceInSignal += samplingInterval
-
-                previousInSignal = inSignal
-        
-        totalTimeInSignal = totalDistanceInSignal / droneSpeed
         return totalDistanceInSignal, totalTimeInSignal, signalCrossings
-    
     def writeMetricsMessages(self, header: str, totalDistanceInSignal, totalTimeInSignal, signalCrossings):
         arcpy.AddMessage(header)
         arcpy.AddMessage(f"Total distance in signal: {totalDistanceInSignal} m")
@@ -279,6 +279,7 @@ def pathSmoothing(path, grid):
 
 #Method used to find if there exists a line between two points that meets a criteria
 def line_of_sight(point1, point2, grid):
+
     if(grid[point1]<grid[point2]):
         return False
     
@@ -288,65 +289,31 @@ def line_of_sight(point1, point2, grid):
 
     gridValue = grid[(x0,y0)]
 
+    
     dx = abs(x1 - x0)
-    dy = abs(y1 - y0)
+    dy = -abs(y1 - y0)
 
-    # sX = 0 if x1 == x0 else 1 if x1 > x0 else -1
-    # sY = 0 if y1 == y0 else 1 if y1 > y0 else -1
+    #Steps in each direction
     sX = 1 if x1 > x0 else -1
     sY = 1 if y1 > y0 else -1
-    err = dx - dy #if dx > dy else dy - dx
 
-    # arcpy.AddMessage(f"Startas: {point1}\nFinisas: {point2}")
+    err = dx + dy #if dx > dy else dy - dx
 
-    if dx > dy:
-        err = dx / 2
-        while x0 != x1:
-            if grid[(x0, y0)] > gridValue:
-                return False
-            x0 += sX
-            err -= dy
-            if err < 0:
-                y0 += sY
-                err += dx
-    else:
-        err = dy / 2
-        while y0 != y1:
-            if grid[(x0, y0)] > gridValue:
-                return False
-            y0 += sY
-            err -= dx
-            if err < 0:
-                x0 += sX
-                err += dy
 
-    if grid[(x1, y1)] > gridValue:
-        return False
+    while x0!=x1 or y0!=y1:
+        if 2*err - dy> dx - 2 * err:
+            err+=dy
+            x0+=sX
+        else:
+            err+=dx
+            y0+=sY
+        if grid[(x0, y0)] > gridValue:
+            return False
 
     return True
 
-    # if dx > dy:
-    #     err = dx / 2
-    #     while x0 != x1:
-    #         if grid[(x0, y0)] != gridValue:
-    #             return False
-    #         err -= dy
-    #         if err < 0:
-    #             y0 += sY
-    #             err += dx
-    #         x0 += sX
-    # else:
-    #     err = dy / 2
-    #     while y0 != y1:
-    #         if grid[(x0, y0)] != gridValue:
-    #             return False
-    #         err -= dx
-    #         if err < 0:
-    #             x0 += sX
-    #             err += dy
-    #         y0 += sY
-    # return True
 
+#Reik pakeist kad tikras reiksmes naudotu o ne masyvo indeksus
 def heuristic(a, b):
     return ((a[0]-b[0])**2 + (a[1]-b[1])**2) ** 0.5
 
