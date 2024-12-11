@@ -131,7 +131,7 @@ class Tool:
             endPoint = array[-1]
 
             boolArray, startIndexes, endIndexes = self.createBoolArray(startPoint, endPoint)
-            path = theta_star(boolArray, startIndexes, endIndexes)
+            path = theta_star(boolArray, startIndexes, endIndexes, 155)
 
             if path is None:
                 arcpy.AddMessage("No path found")
@@ -229,10 +229,10 @@ class Tool:
         return self.radar[*self.snapPointToRasterCenter(arcpy.Point(x, y))] > -110
     
     def createBoolArray(self, start, end):
-        array = arcpy.RasterToNumPyArray(self.radar, nodata_to_value=-200)
+        array = arcpy.RasterToNumPyArray(self.radar, nodata_to_value=-111)
         startIndex = self.snapPointToRasterCenter(start)
         endIndex = self.snapPointToRasterCenter(end)
-        return array > -110, startIndex, endIndex
+        return array, startIndex, endIndex
     
     def createPointArray(self, start: arcpy.Point, path: list, startIndexes):
         pointArray = arcpy.Array()
@@ -293,27 +293,30 @@ class Tool:
         totalTimeInSignal = totalDistanceInSignal / droneSpeed
         return totalDistanceInSignal, totalTimeInSignal, signalCrossings
     
+
     def writeMetricsMessages(self, header: str, totalDistanceInSignal, totalTimeInSignal, signalCrossings):
         arcpy.AddMessage(header)
         arcpy.AddMessage(f"Total distance in signal: {totalDistanceInSignal} m")
         arcpy.AddMessage(f"Total time in signal: {totalTimeInSignal} s")
         arcpy.AddMessage(f"Signal crossings: {signalCrossings}")
 
-def theta_star(grid, start, end):
+def theta_star(grid, start, end, weight):
     rows, cols = grid.shape
     open_set = []
-    heapq.heappush(open_set, (heuristic(start,end), start))  # (f, node)
+    heapq.heappush(open_set, (0, start))  # (f, node)
     came_from = {start: start}
     g_score = {start: 0}
-    f_score = {start: heuristic(start, end)}
+    f_score = {start: euclidian(start,end)}
     visited = set()
 
     while open_set:
         _, current = heapq.heappop(open_set)
-
+        # arcpy.AddMessage(f"{current}, score: {f_score[current]}, gridvalue: {grid[current]}")
         if current in visited:
             continue
         visited.add(current)
+
+
 
         if current == end:
             # Reconstruct path
@@ -321,11 +324,12 @@ def theta_star(grid, start, end):
             while current != came_from[current]:
                 path.append(current)
                 current = came_from[current]
-            return path[::-1]
+            return pathSmoothing(path[::-1],grid)
 
         # Explore neighbors
         neighbors = [
             (current[0] + dx, current[1] + dy)
+            # for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (1,1), (-1,-1), (-1,1), (1,-1)]
             for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
         ]
         for neighbor in neighbors:
@@ -333,72 +337,80 @@ def theta_star(grid, start, end):
             if (
                 0 <= neighbor[0] < rows and
                 0 <= neighbor[1] < cols and
-                not grid[neighbor] and
                 neighbor not in visited
             ):
                 if neighbor not in open_set:
                     g_score[neighbor] = float('inf')
                     came_from[neighbor] = None
-                update_vertex(current,neighbor,g_score,came_from,open_set,end,grid, f_score)
+                update_vertex(current,neighbor,g_score,came_from,open_set,end,grid, f_score, weight)
 
     return None  # No path found
 
-def update_vertex(current, neighbor, g_score, parent, open_set, finish, grid, f_score):
-    if line_of_sight(parent[current], neighbor, grid):
-        new_g = g_score[parent[current]] + 1
-        if new_g < g_score[neighbor]:
-            g_score[neighbor] = new_g
-            f_score[neighbor] = new_g + heuristic(neighbor,finish)
-            parent[neighbor] = parent[current]
-            if neighbor in open_set:
-                open_set.remove(neighbor)
-            heapq.heappush(open_set, (f_score[neighbor], neighbor))
-    else:
-        new_g = g_score[current] + 1
-        if new_g < g_score[neighbor]:
-            g_score[neighbor] = new_g
-            f_score[neighbor] = new_g + heuristic(neighbor,finish)
-            parent[neighbor] = current
-            if neighbor in open_set:
-                open_set.remove(neighbor)
-            heapq.heappush(open_set, (f_score[neighbor], neighbor))
+def update_vertex(current, neighbor, g_score, parent, open_set, finish, grid, f_score, weight):
+    new_g = g_score[current] + euclidian(current,neighbor) + weight*detectionCost(grid[neighbor])
+    if new_g < g_score[neighbor]:
+        g_score[neighbor] = new_g
+        f_score[neighbor] = new_g + euclidian(neighbor,finish)
+        parent[neighbor] = current
+        if neighbor in open_set:
+            open_set.remove(neighbor)
+        heapq.heappush(open_set, (f_score[neighbor], neighbor))
+
+def pathSmoothing(path, grid):
+    parentIndex = 0
+    resultPath = []
+    resultPath.append(path[0])
+    for i in range(0,len(path)-1):
+        if line_of_sight(resultPath[parentIndex], path[i+1], grid) == False:
+            parentIndex += 1
+            resultPath.append(path[i])
+    resultPath.append(path[len(path)-1])
+    return resultPath
+
 
 def line_of_sight(point1, point2, grid):
+
+    if(grid[point1]<grid[point2]):
+        return False
+    
 
     x0, y0 = point1
     x1, y1 = point2
 
-    dx = abs(x1 - x0)
-    dy = abs(y1 - y0)
+    gridValue = grid[(x0,y0)]
 
+    
+    dx = abs(x1 - x0)
+    dy = -abs(y1 - y0)
+
+    #Steps in each direction
     sX = 1 if x1 > x0 else -1
     sY = 1 if y1 > y0 else -1
 
-    if dx > dy:
-        err = dx / 2
-        while x0 != x1:
-            if grid[(x0, y0)]:
-                return False
-            err -= dy
-            if err < 0:
-                y0 += sY
-                err += dx
-            x0 += sX
-    else:
-        err = dy / 2
-        while y0 != y1:
-            if grid[(x0, y0)]:
-                return False
-            err -= dx
-            if err < 0:
-                x0 += sX
-                err += dy
-            y0 += sY
+    err = dx + dy #if dx > dy else dy - dx
+
+
+    while x0!=x1 or y0!=y1:
+        if 2*err - dy> dx - 2 * err:
+            err+=dy
+            x0+=sX
+        else:
+            err+=dx
+            y0+=sY
+        if grid[(x0, y0)] > gridValue:
+            return False
+
     return True
 
 def heuristic(a, b):
 # Manhattan distance
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+def euclidian(a,b):
+    return ((a[0]-b[0])**2 + (a[1]-b[1])**2) ** 0.5
+
+def detectionCost(fieldStrength):
+    return (fieldStrength+111)/111
 
 def interpolatePoints(point1, point2, interval: int):
     x1, y1 = point1
