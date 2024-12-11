@@ -60,7 +60,7 @@ class Tool:
                 displayName='Draw auto route',
                 name='drawAutoRoute',
                 datatype='GPBoolean',
-                parameterType='Required',
+                parameterType='Optional',
                 direction='Input'
             )
         ]
@@ -86,7 +86,7 @@ class Tool:
     def execute(self, parameters, messages):      
         waypoints = parameters[0].value
         self.radar = arcpy.Raster(parameters[1].valueAsText)
-        waypoint_file = parameters[2].value 
+        waypoint_file = parameters[2].valueAsText 
         droneSpeed = parameters[3].value
         drawAutoRoute = parameters[4].value
 
@@ -166,45 +166,62 @@ class Tool:
         suffixes = pathlib.Path(file).suffixes
         match suffixes[len(suffixes)-1]:
             case '.csv':
-                try:
-                    for line in open(file, 'r'):
-                        splitLine = line.split(',')
-                        if len(splitLine) in (2, 3):
-                            points = [float(i) for i in splitLine]
-                            array.add(arcpy.Point(*points))
-                except:
-                    arcpy.AddMessage("Invalid file or values")
+                array = self.importCsv(file)
 
             case '.xml':
-                try:
-                    tree = xml.parse(file)
-                    root = tree.getroot()
-                    for point in root.findall('Point'):
-                        x, y= float(point.find('x').text), float(point.find('y').text)
-                        z = point.find('z')
-                        if z is not None:
-                            array.add(arcpy.Point(x, y, float(z.text)))
-                        else:
-                            array.add(arcpy.Point(x, y))
-                except:
-                    arcpy.AddMessage("Invalid file or values")
-
+                array = self.importXml(file)
 
             case '.json':
-                try:
-                    with open(file, 'r') as file:
-                        data = json.load(file)
-                    for line in data:
-                        array.add(arcpy.Point(line['x'], line['y'], line['z'])) if 'z' in line else \
-                        array.add(arcpy.Point(line['x'], line['y']))
-                except:
-                    arcpy.AddMessage("Invalid file or values")
+                array = self.importJson(file)
 
             case _:
                 arcpy.AddMessage("Invalid file format")
 
         return array
     
+    def importCsv(self, file):
+        array = arcpy.Array()
+        try:
+            for line in open(file, 'r'):
+                splitLine = line.split(',')
+                if len(splitLine) in (2, 3):
+                    points = [float(i) for i in splitLine]
+                    array.add(arcpy.Point(*points))
+        except:
+            arcpy.AddMessage("Invalid file or values")
+
+        return array
+    
+    def importXml(self, file):
+        array = arcpy.Array()
+        try:
+            tree = xml.parse(file)
+            root = tree.getroot()
+            for point in root.findall('Point'):
+                x, y= float(point.find('x').text), float(point.find('y').text)
+                z = point.find('z')
+                if z is not None:
+                    array.add(arcpy.Point(x, y, float(z.text)))
+                else:
+                    array.add(arcpy.Point(x, y))
+        except:
+            arcpy.AddMessage("Invalid file or values")
+
+        return array
+    
+    def importJson(self, file):
+        array = arcpy.Array()
+        try:
+            with open(file, 'r') as file:
+                data = json.load(file)
+            for line in data:
+                array.add(arcpy.Point(float(line['x']), float(line['y']), float(line['z']))) if 'z' in line else \
+                array.add(arcpy.Point(float(line['x']), float(line['y'])))
+        except:
+            arcpy.AddMessage("Invalid file or values")
+
+        return array
+
     def getRadarValue(self, x, y):
         return float(arcpy.GetCellValue_management(self.radar,f'{x} {y}',None).getOutput(0))
     
