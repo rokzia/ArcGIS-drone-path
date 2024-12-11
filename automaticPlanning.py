@@ -126,7 +126,7 @@ class Tool:
     
 
     def radarValueArray(self, start, end):
-        array = arcpy.RasterToNumPyArray(self.radar, nodata_to_value=-200)
+        array = arcpy.RasterToNumPyArray(self.radar, nodata_to_value=-111)
         startIndex = self.snapPointToRasterCenter(start)
         endIndex = self.snapPointToRasterCenter(end)
         return array, startIndex, endIndex
@@ -135,10 +135,17 @@ class Tool:
         return self.radar[*self.snapPointToRasterCenter(arcpy.Point(x, y))] > -110
     
     def createPointArray(self, start: arcpy.Point, path: list, startIndexes):
+
+        rasterOriginX = self.radar.extent.XMin
+        rasterOriginY = self.radar.extent.YMax 
+
         pointArray = arcpy.Array()
         pointArray.add(start)
-        tempX = start.X
-        tempY = start.Y
+        arcpy.AddMessage(f"pries {(start.X, start.Y)}, checkas {(int((start.X - rasterOriginX) / self.resolution), int((start.Y - rasterOriginY) / self.resolution))}")
+        tempX = ((int((start.X - rasterOriginX) / self.resolution) + 0.5) * self.resolution) + rasterOriginX
+        tempY = ((int((start.Y - rasterOriginY) / self.resolution) + 0.5) * self.resolution) + rasterOriginY
+        arcpy.AddMessage(f"po {(tempX, tempY)}, checkas {(int((tempX - rasterOriginX) / self.resolution), int((tempY - rasterOriginY) / self.resolution))}")
+        # pointArray.add(arcpy.Point(tempX,tempY))
         prevY, prevX = startIndexes
         for i in range(len(path)):
             y, x = path[i]
@@ -163,9 +170,9 @@ class Tool:
         
 
         col = int((point.X - rasterOriginX) / self.resolution)
-        row = int((rasterOriginY - point.Y) / self.resolution)
+        row = int((rasterOriginY - point.Y) / self.resolution)-1
         
-
+        # arcpy.AddMessage(f"Is {(point.X ,point.Y)} paverte i {(col, row)}")
         return row, col
     
     #drone speed in meters per second
@@ -212,7 +219,7 @@ def theta_star(grid, start, end, weight):
 
     while open_set:
         _, current = heapq.heappop(open_set)
-
+        # arcpy.AddMessage(f"{current}, score: {f_score[current]}, gridvalue: {grid[current]}")
         if current in visited:
             continue
         visited.add(current)
@@ -272,6 +279,9 @@ def pathSmoothing(path, grid):
 
 #Method used to find if there exists a line between two points that meets a criteria
 def line_of_sight(point1, point2, grid):
+    if(grid[point1]<grid[point2]):
+        return False
+    
 
     x0, y0 = point1
     x1, y1 = point2
@@ -281,30 +291,61 @@ def line_of_sight(point1, point2, grid):
     dx = abs(x1 - x0)
     dy = abs(y1 - y0)
 
+    # sX = 0 if x1 == x0 else 1 if x1 > x0 else -1
+    # sY = 0 if y1 == y0 else 1 if y1 > y0 else -1
     sX = 1 if x1 > x0 else -1
     sY = 1 if y1 > y0 else -1
+    err = dx - dy #if dx > dy else dy - dx
+
+    # arcpy.AddMessage(f"Startas: {point1}\nFinisas: {point2}")
 
     if dx > dy:
         err = dx / 2
         while x0 != x1:
             if grid[(x0, y0)] > gridValue:
                 return False
+            x0 += sX
             err -= dy
             if err < 0:
                 y0 += sY
                 err += dx
-            x0 += sX
     else:
         err = dy / 2
         while y0 != y1:
             if grid[(x0, y0)] > gridValue:
                 return False
+            y0 += sY
             err -= dx
             if err < 0:
                 x0 += sX
                 err += dy
-            y0 += sY
+
+    if grid[(x1, y1)] > gridValue:
+        return False
+
     return True
+
+    # if dx > dy:
+    #     err = dx / 2
+    #     while x0 != x1:
+    #         if grid[(x0, y0)] != gridValue:
+    #             return False
+    #         err -= dy
+    #         if err < 0:
+    #             y0 += sY
+    #             err += dx
+    #         x0 += sX
+    # else:
+    #     err = dy / 2
+    #     while y0 != y1:
+    #         if grid[(x0, y0)] != gridValue:
+    #             return False
+    #         err -= dx
+    #         if err < 0:
+    #             x0 += sX
+    #             err += dy
+    #         y0 += sY
+    # return True
 
 def heuristic(a, b):
     return ((a[0]-b[0])**2 + (a[1]-b[1])**2) ** 0.5
@@ -314,7 +355,7 @@ def manhattan(a,b):
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 def detectionCost(fieldStrength):
-    return (fieldStrength+200)/200
+    return (fieldStrength+111)/111
 
 def interpolatePoints(point1, point2, interval: int):
     x1, y1 = point1
