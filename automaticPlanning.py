@@ -115,7 +115,7 @@ class Tool:
         current_map.addDataFromPath(lineFeatureClass)
         current_map.addDataFromPath(pointFeatureClass)
 
-        self.writeMetricsMessages("Metrics for the path:", *self.calculateRouteMetrics(radarValues, line, droneSpeed, self.resolution))
+        self.writeMetricsMessages("Metrics for the path:", *self.calculateRouteMetrics(radarValues, line, droneSpeed))
 
         return
 
@@ -177,7 +177,7 @@ class Tool:
         return row, col
     
     #drone speed in meters per second
-    def calculateRouteMetrics(self, radarValues: arcpy.Array, path: arcpy.Polyline, droneSpeed: float, samplingInterval: int):
+    def calculateRouteMetrics(self, radarValues: arcpy.Array, path: arcpy.Polyline, droneSpeed: float):
         
         
         
@@ -195,13 +195,12 @@ class Tool:
 
         lineStartPoints = arcpy.management.FeatureVerticesToPoints(intersectLines,'point_test', 'START')
         signalCrossings = arcpy.management.GetCount(lineStartPoints)
-        # with arcpy.da.SearchCursor(lineStartPoints, ["SHAPE@"]) as cursor:
-        #     for row in cursor:
-        #         signalCrossings+=1
 
         totalTimeInSignal = totalDistanceInSignal/droneSpeed
 
         return totalDistanceInSignal, totalTimeInSignal, signalCrossings
+    
+
     def writeMetricsMessages(self, header: str, totalDistanceInSignal, totalTimeInSignal, signalCrossings):
         arcpy.AddMessage(header)
         arcpy.AddMessage(f"Total distance in signal: {totalDistanceInSignal} m")
