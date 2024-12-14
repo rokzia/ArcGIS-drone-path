@@ -42,13 +42,33 @@ class Tool:
                 direction='Input'
             ),
             arcpy.Parameter(
-                displayName='Drone speed',
+                displayName='Drone speed (m/s)',
                 name='droneSpeed',
                 datatype='GPDouble',
                 parameterType='Required',
                 direction='Input'
+            ),
+            arcpy.Parameter(
+                displayName='Time in signal (s)',
+                name='timeInSignal',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
+                displayName='Distance in signal (m)',
+                name='distanceInSignal',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
+                displayName='Signal crossings',
+                name='signalCrossings',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
             )
-
         ]
         return params
 
@@ -84,12 +104,12 @@ class Tool:
 
         #konfiguracija
         current_map = arcpy.mp.ArcGISProject('CURRENT').activeMap
-        spatial_reference = current_map.spatialReference
+        spatial_reference = arcpy.SpatialReference(3346)
         lineFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"Line","POLYLINE", spatial_reference = spatial_reference)
         pointFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"Points","POINT", spatial_reference = spatial_reference)
 
         startPoint = tempArr[0]
-        endPoint = tempArr[1]
+        endPoint = tempArr[-1]
 
         weight = 3000 #The amount radar values effect path judgement
 
@@ -97,9 +117,10 @@ class Tool:
         path = theta_star(radarValues, startIndexes, endIndexes, weight, self.resolution, (self.radar.extent.XMin, self.radar.extent.YMax))
 
         if path is None:
-            arcpy.AddMessage("No path found")
+            parameters[3].value = 'No path found'
+            parameters[4].value = 'No path found'
+            parameters[5].value = 'No path found'
             return
-        arcpy.AddMessage(path)
 
         pointArray = self.createPointArray(startPoint, path, startIndexes)
 
@@ -115,7 +136,11 @@ class Tool:
         current_map.addDataFromPath(lineFeatureClass)
         current_map.addDataFromPath(pointFeatureClass)
 
-        self.writeMetricsMessages("Metrics for the path:", *self.calculateRouteMetrics(radarValues, line, droneSpeed))
+        distance, time, crossings = self.calculateRouteMetrics(radarValues, line, droneSpeed)
+
+        parameters[3].value = time
+        parameters[4].value = distance
+        parameters[5].value = crossings
 
         return
 
@@ -178,9 +203,7 @@ class Tool:
     
     #drone speed in meters per second
     def calculateRouteMetrics(self, radarValues: arcpy.Array, path: arcpy.Polyline, droneSpeed: float):
-        
-        
-        
+
         totalDistanceInSignal = 0
         totalTimeInSignal = 0
         signalCrossings = 0
@@ -200,12 +223,6 @@ class Tool:
 
         return totalDistanceInSignal, totalTimeInSignal, signalCrossings
     
-
-    def writeMetricsMessages(self, header: str, totalDistanceInSignal, totalTimeInSignal, signalCrossings):
-        arcpy.AddMessage(header)
-        arcpy.AddMessage(f"Total distance in signal: {totalDistanceInSignal} m")
-        arcpy.AddMessage(f"Total time in signal: {totalTimeInSignal} s")
-        arcpy.AddMessage(f"Signal crossings: {signalCrossings}")
 
 def theta_star(grid, start, end, weight, resolution, origin):
     rows, cols = grid.shape
