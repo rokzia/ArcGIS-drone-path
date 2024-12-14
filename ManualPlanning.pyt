@@ -62,6 +62,48 @@ class Tool:
                 datatype='GPBoolean',
                 parameterType='Optional',
                 direction='Input'
+            ),
+            arcpy.Parameter(
+                displayName='Manual route time in signal (s)',
+                name='timeInSignal',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
+                displayName='Manual route distance in signal (m)',
+                name='distanceInSignal',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
+                displayName='Manual route signal crossings',
+                name='signalCrossings',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
+                displayName='Automatic route time in signal (s)',
+                name='autoTimeInSignal',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
+                displayName='Automatic route distance in signal (m)',
+                name='autoDistanceInSignal',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
+                displayName='Automatic route signal crossings',
+                name='autoSignalCrossings',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
             )
         ]
 
@@ -120,8 +162,14 @@ class Tool:
         current_map.addDataFromPath(lineFeatureClass)
         current_map.addDataFromPath(pointFeatureClass)
 
-        self.writeMetricsMessages("Manual route metrics:", *self.calculateRouteMetrics(array, self.radar, droneSpeed, self.resolution))
+        distance, time, crossings = self.calculateRouteMetrics(array, self.radar, droneSpeed, self.resolution)
+
+        parameters[5].value = time
+        parameters[6].value = distance
+        parameters[7].value = crossings
+
         #Manual planning end
+
         if drawAutoRoute:
             #Insert auto planning route as well
             lineFeatureClass = arcpy.CreateFeatureclass_management(arcpy.env.workspace,"LineAuto","POLYLINE", spatial_reference = spatial_reference)
@@ -151,7 +199,11 @@ class Tool:
             current_map.addDataFromPath(lineFeatureClass)
             current_map.addDataFromPath(pointFeatureClass)
 
-            self.writeMetricsMessages("Auto route metrics:", *self.calculateRouteMetrics(array, self.radar, droneSpeed, self.resolution))
+            distance, time, crossings = self.calculateRouteMetrics(array, self.radar, droneSpeed, self.resolution)
+
+            parameters[8].value = time
+            parameters[9].value = distance
+            parameters[10].value = crossings
 
         return
 
@@ -425,5 +477,4 @@ def interpolatePoints(point1, point2, interval: int):
         for i in range(1, numSamples + 1)
     ]
     return points
-
 
