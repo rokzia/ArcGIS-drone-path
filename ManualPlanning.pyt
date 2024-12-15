@@ -178,8 +178,10 @@ class Tool:
             startPoint = array[0]
             endPoint = array[-1]
 
+            weight = 3000
+
             boolArray, startIndexes, endIndexes = self.createBoolArray(startPoint, endPoint)
-            path = theta_star(boolArray, startIndexes, endIndexes, 155)
+            path = a_star(boolArray, startIndexes, endIndexes, weight, self.resolution, (self.radar.extent.XMin, self.radar.extent.YMax))
 
             if path is None:
                 arcpy.AddMessage("No path found")
@@ -352,18 +354,18 @@ class Tool:
         arcpy.AddMessage(f"Total time in signal: {totalTimeInSignal} s")
         arcpy.AddMessage(f"Signal crossings: {signalCrossings}")
 
-def theta_star(grid, start, end, weight):
+def a_star(grid, start, end, weight, resolution, origin):
     rows, cols = grid.shape
     open_set = []
     heapq.heappush(open_set, (0, start))  # (f, node)
     came_from = {start: start}
     g_score = {start: 0}
-    f_score = {start: euclidian(start,end)}
+    f_score = {start: euclidian(start,end, resolution, origin)}
     visited = set()
 
     while open_set:
         _, current = heapq.heappop(open_set)
-        # arcpy.AddMessage(f"{current}, score: {f_score[current]}, gridvalue: {grid[current]}")
+
         if current in visited:
             continue
         visited.add(current)
@@ -381,31 +383,34 @@ def theta_star(grid, start, end, weight):
         # Explore neighbors
         neighbors = [
             (current[0] + dx, current[1] + dy)
-            # for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (1,1), (-1,-1), (-1,1), (1,-1)]
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (1,1), (-1,-1), (-1,1), (1,-1)]
         ]
+
         for neighbor in neighbors:
 
             if (
-                0 <= neighbor[0] < rows and
-                0 <= neighbor[1] < cols and
-                neighbor not in visited
+                0 <= neighbor[0] < rows
+                and 0 <= neighbor[1] < cols 
+                and neighbor not in visited
             ):
                 if neighbor not in open_set:
-                    g_score[neighbor] = float('inf')
+                    f_score[neighbor] = float('inf')
                     came_from[neighbor] = None
-                update_vertex(current,neighbor,g_score,came_from,open_set,end,grid, f_score, weight)
+                update_vertex(current,neighbor,g_score,came_from,open_set,end,grid, f_score, weight, resolution, origin)
 
     return None  # No path found
 
-def update_vertex(current, neighbor, g_score, parent, open_set, finish, grid, f_score, weight):
-    new_g = g_score[current] + euclidian(current,neighbor) + weight*detectionCost(grid[neighbor])
-    if new_g < g_score[neighbor]:
+
+def update_vertex(current, neighbor, g_score, parent, open_set, finish, grid, f_score, weight, resolution, origin):
+    new_g = g_score[current] + 1
+    new_f =  new_g + euclidian(finish,neighbor, resolution, origin) + weight*detectionCost(grid[neighbor])
+    if new_f < f_score[neighbor]:
         g_score[neighbor] = new_g
-        f_score[neighbor] = new_g + euclidian(neighbor,finish)
+        f_score[neighbor] = new_f 
         parent[neighbor] = current
         if neighbor in open_set:
             open_set.remove(neighbor)
+            heapq.heapify(open_set)
         heapq.heappush(open_set, (f_score[neighbor], neighbor))
 
 def pathSmoothing(path, grid):
@@ -451,6 +456,8 @@ def line_of_sight(point1, point2, grid):
             y0+=sY
         if grid[(x0, y0)] > gridValue:
             return False
+        if grid[(x0, y0)] < gridValue:
+            gridValue = grid[(x0, y0)]
 
     return True
 
@@ -458,8 +465,18 @@ def heuristic(a, b):
 # Manhattan distance
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-def euclidian(a,b):
-    return ((a[0]-b[0])**2 + (a[1]-b[1])**2) ** 0.5
+def euclidian(a, b, resolution, origin):
+
+    rasterOriginX, rasterOriginY = origin
+
+    #True coordinates
+    x0 = ((a[0] + 0.5) * resolution) + rasterOriginX
+    x1 = ((b[0] + 0.5) * resolution) + rasterOriginX
+    y0 = ((a[1] + 0.5) * resolution) + rasterOriginY
+    y1 = ((b[1] + 0.5) * resolution) + rasterOriginY
+
+
+    return ((x1-x0)**2 + (y1-y0)**2) ** 0.5
 
 def detectionCost(fieldStrength):
     return (fieldStrength+111)/111
@@ -477,4 +494,3 @@ def interpolatePoints(point1, point2, interval: int):
         for i in range(1, numSamples + 1)
     ]
     return points
-
