@@ -11,7 +11,7 @@ class Toolbox:
     def __init__(self):
         """Define the toolbox (the name of the toolbox is the name of the
         .pyt file)."""
-        self.label = "Toolbox"
+        self.label = "Automatic route planning"
         self.alias = "toolbox"
 
         # List of tool classes associated with this toolbox
@@ -21,7 +21,7 @@ class Toolbox:
 class Tool:
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
-        self.label = "Tool"
+        self.label = "Automatic planning script"
         self.description = ""
 
     def getParameterInfo(self):
@@ -198,7 +198,7 @@ class Tool:
         col = int((point.X - rasterOriginX) / self.resolution)
         row = int((rasterOriginY - point.Y) / self.resolution)-1
         
-
+        # arcpy.AddMessage(f"Is {(point.X ,point.Y)} paverte i {(col, row)}")
         return row, col
     
     #drone speed in meters per second
@@ -235,7 +235,7 @@ def a_star(grid, start, end, weight, resolution, origin):
 
     while open_set:
         _, current = heapq.heappop(open_set)
-
+        # arcpy.AddMessage(f"{current}, score: {f_score[current]}, gridvalue: {grid[current]}")
         if current in visited:
             continue
         visited.add(current)
@@ -254,7 +254,7 @@ def a_star(grid, start, end, weight, resolution, origin):
         neighbors = [
             (current[0] + dx, current[1] + dy)
             for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (1,1), (-1,-1), (-1,1), (1,-1)]
-
+            # for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
         ]
 
         for neighbor in neighbors:
@@ -346,6 +346,7 @@ def heuristic(a, b, resolution, origin):
 
 
     return ((x1-x0)**2 + (y1-y0)**2) ** 0.5
+
 
 def detectionCost(fieldStrength):
     return (fieldStrength+111)/111
