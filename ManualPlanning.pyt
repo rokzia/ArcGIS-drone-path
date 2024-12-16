@@ -71,7 +71,7 @@ class Tool:
                 direction='Output'
             ),
             arcpy.Parameter(
-                displayName='Manual route distance in signal (m)',
+                displayName='Manual route autoDistance in signal (m)',
                 name='distanceInSignal',
                 datatype='GPString',
                 parameterType='Derived',
@@ -85,6 +85,13 @@ class Tool:
                 direction='Output'
             ),
             arcpy.Parameter(
+                displayName='Manual route average signal strength',
+                name='signalStrength',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
                 displayName='Automatic route time in signal (s)',
                 name='autoTimeInSignal',
                 datatype='GPString',
@@ -92,7 +99,7 @@ class Tool:
                 direction='Output'
             ),
             arcpy.Parameter(
-                displayName='Automatic route distance in signal (m)',
+                displayName='Automatic route autoDistance in signal (m)',
                 name='autoDistanceInSignal',
                 datatype='GPString',
                 parameterType='Derived',
@@ -101,6 +108,27 @@ class Tool:
             arcpy.Parameter(
                 displayName='Automatic route signal crossings',
                 name='autoSignalCrossings',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
+                displayName='Automatic route average signal strength',
+                name='autoSignalStrength',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
+                displayName='Route time in signal comparison',
+                name='routeComparisonTime',
+                datatype='GPString',
+                parameterType='Derived',
+                direction='Output'
+            ),
+            arcpy.Parameter(
+                displayName='Route average signal strength comparison',
+                name='routeComparisonAverage',
                 datatype='GPString',
                 parameterType='Derived',
                 direction='Output'
@@ -133,6 +161,7 @@ class Tool:
         drawAutoRoute = parameters[4].value
 
         self.resolution = self.radar.meanCellWidth
+        self.numpyRaster = arcpy.RasterToNumPyArray(self.radar, nodata_to_value=-111)
 
         array = arcpy.Array()
 
@@ -162,11 +191,12 @@ class Tool:
         current_map.addDataFromPath(lineFeatureClass)
         current_map.addDataFromPath(pointFeatureClass)
 
-        distance, time, crossings = self.calculateRouteMetrics(array, self.radar, droneSpeed, self.resolution)
+        manualDistance, manualTime, manualCrossings, manualAverage = self.calculateRouteMetrics(array, self.radar, droneSpeed, self.resolution)
 
-        parameters[5].value = time
-        parameters[6].value = distance
-        parameters[7].value = crossings
+        parameters[5].value = manualTime
+        parameters[6].value = manualDistance
+        parameters[7].value = manualCrossings
+        parameters[8].value = manualAverage
 
         #Manual planning end
 
@@ -180,8 +210,11 @@ class Tool:
 
             weight = 3000
 
-            boolArray, startIndexes, endIndexes = self.createBoolArray(startPoint, endPoint)
-            path = a_star(boolArray, startIndexes, endIndexes, weight, self.resolution, (self.radar.extent.XMin, self.radar.extent.YMax))
+            
+            startIndexes = self.snapPointToRasterCenter(startPoint)
+            endIndexes = self.snapPointToRasterCenter(endPoint)
+
+            path = a_star(self.numpyRaster, startIndexes, endIndexes, weight, self.resolution, (self.radar.extent.XMin, self.radar.extent.YMax))
 
             if path is None:
                 arcpy.AddMessage("No path found")
@@ -201,12 +234,27 @@ class Tool:
             current_map.addDataFromPath(lineFeatureClass)
             current_map.addDataFromPath(pointFeatureClass)
 
-            distance, time, crossings = self.calculateRouteMetrics(array, self.radar, droneSpeed, self.resolution)
+            autoDistance, autoTime, autoCrossings, autoAverage = self.calculateRouteMetrics(array, self.radar, droneSpeed, self.resolution)
 
-            parameters[8].value = time
-            parameters[9].value = distance
-            parameters[10].value = crossings
+            parameters[9].value = autoTime
+            parameters[10].value = autoDistance
+            parameters[11].value = autoCrossings
+            parameters[12].value = autoAverage
 
+            if autoTime < manualTime:
+                parameters[13].value = "Automatic route spends less time in signal"
+            elif autoTime > manualTime:
+                parameters[13].value = "Manual route spends less time in signal"
+            else:
+                parameters[13].value = "Both routes spend the same time in signal"
+
+            if manualAverage < autoAverage:
+                parameters[14].value = "Manual route has better average signal strength"
+            elif manualAverage > autoAverage:
+                parameters[14].value = "Automatic route has better average signal strength"
+            else:
+                parameters[14].value = "Both routes have the same average signal strength"
+        
         return
 
 
@@ -325,6 +373,8 @@ class Tool:
         totalDistanceInSignal = 0
         totalTimeInSignal = 0
         signalCrossings = 0
+        average = 0
+        count = 0
         previousInSignal = None
 
         for i in range(len(pointArray) - 1):
@@ -334,7 +384,12 @@ class Tool:
             points = interpolatePoints((x1, y1), (x2, y2), samplingInterval)
 
             for x, y in points:
-                inSignal = self.isInSignal(x, y)
+                rasterValue = self.numpyRaster[*self.snapPointToRasterCenter(arcpy.Point(x, y))]
+                arcpy.AddMessage(f"Raster value: {self.numpyRaster[*self.snapPointToRasterCenter(arcpy.Point(x, y))]}")
+                average += rasterValue
+                count += 1
+
+                inSignal = rasterValue > -110
 
                 if previousInSignal is not None and previousInSignal != inSignal:
                     signalCrossings += 1
@@ -345,12 +400,13 @@ class Tool:
                 previousInSignal = inSignal
         
         totalTimeInSignal = totalDistanceInSignal / droneSpeed
-        return totalDistanceInSignal, totalTimeInSignal, signalCrossings
+        average = average / count
+        return totalDistanceInSignal, totalTimeInSignal, signalCrossings, average
     
 
     def writeMetricsMessages(self, header: str, totalDistanceInSignal, totalTimeInSignal, signalCrossings):
         arcpy.AddMessage(header)
-        arcpy.AddMessage(f"Total distance in signal: {totalDistanceInSignal} m")
+        arcpy.AddMessage(f"Total autoDistance in signal: {totalDistanceInSignal} m")
         arcpy.AddMessage(f"Total time in signal: {totalTimeInSignal} s")
         arcpy.AddMessage(f"Signal crossings: {signalCrossings}")
 
@@ -462,7 +518,7 @@ def line_of_sight(point1, point2, grid):
     return True
 
 def heuristic(a, b):
-# Manhattan distance
+# Manhattan autoDistance
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 def euclidian(a, b, resolution, origin):
@@ -484,8 +540,8 @@ def detectionCost(fieldStrength):
 def interpolatePoints(point1, point2, interval: int):
     x1, y1 = point1
     x2, y2 = point2
-    distance = sqrt((x2 - x1)**2 + (y2 - y1)**2)
-    numSamples = ceil(distance / interval)
+    autoDistance = sqrt((x2 - x1)**2 + (y2 - y1)**2)
+    numSamples = ceil(autoDistance / interval)
     points = [
         (
             x1 + (x2 - x1) * i / numSamples,
