@@ -63,7 +63,6 @@ class Tool:
                 parameterType='Optional',
                 direction='Input'
             ),
-            #Manual route output
             arcpy.Parameter(
                 displayName='Manual route time in signal (s)',
                 name='timeInSignal',
@@ -92,7 +91,6 @@ class Tool:
                 parameterType='Derived',
                 direction='Output'
             ),
-            #Automatic route output
             arcpy.Parameter(
                 displayName='Automatic route time in signal (s)',
                 name='autoTimeInSignal',
@@ -121,7 +119,6 @@ class Tool:
                 parameterType='Derived',
                 direction='Output'
             ),
-            #Comparison
             arcpy.Parameter(
                 displayName='Route time in signal comparison',
                 name='routeComparisonTime',
@@ -211,8 +208,9 @@ class Tool:
             startPoint = array[0]
             endPoint = array[-1]
 
-            weight = 3000
+            weight = 30000
 
+            
             startIndexes = self.snapPointToRasterCenter(startPoint)
             endIndexes = self.snapPointToRasterCenter(endPoint)
 
@@ -325,12 +323,32 @@ class Tool:
             arcpy.AddMessage("Invalid file or values")
 
         return array
+
+    def getRadarValue(self, x, y):
+        return float(arcpy.GetCellValue_management(self.radar,f'{x} {y}',None).getOutput(0))
+    
+    def isInSignal(self, x, y):
+        return self.radar[*self.snapPointToRasterCenter(arcpy.Point(x, y))] > -110
+    
+    def createBoolArray(self, start, end):
+        array = arcpy.RasterToNumPyArray(self.radar, nodata_to_value=-111)
+        startIndex = self.snapPointToRasterCenter(start)
+        endIndex = self.snapPointToRasterCenter(end)
+        return array, startIndex, endIndex
     
     def createPointArray(self, start: arcpy.Point, path: list, startIndexes):
+
+        rasterOriginX = self.radar.extent.XMin
+        rasterOriginY = self.radar.extent.YMax 
+
         pointArray = arcpy.Array()
         pointArray.add(start)
-        tempX = start.X
-        tempY = start.Y
+        
+        #Setting starting coordinates to be in the center of raster cell
+        tempX = ((int((start.X - rasterOriginX) / self.resolution) + 0.5) * self.resolution) + rasterOriginX
+        tempY = ((int((start.Y - rasterOriginY) / self.resolution) + 0.5) * self.resolution) + rasterOriginY
+
+        # pointArray.add(arcpy.Point(tempX,tempY))
         prevY, prevX = startIndexes
         for i in range(len(path)):
             y, x = path[i]
@@ -359,7 +377,7 @@ class Tool:
         return row, col
     
     #drone speed in meters per second
-    def calculateRouteMetrics(self, pointArray: arcpy.Array, droneSpeed: float, samplingInterval: int):
+    def calculateRouteMetrics(self, pointArray: arcpy.Array, raster: arcpy.Raster, droneSpeed: float, samplingInterval: int):
         totalDistanceInSignal = 0
         totalTimeInSignal = 0
         signalCrossings = 0
@@ -375,6 +393,7 @@ class Tool:
 
             for x, y in points:
                 rasterValue = self.numpyRaster[*self.snapPointToRasterCenter(arcpy.Point(x, y))]
+                arcpy.AddMessage(f"Raster value: {self.numpyRaster[*self.snapPointToRasterCenter(arcpy.Point(x, y))]}")
                 average += rasterValue
                 count += 1
 
@@ -391,7 +410,15 @@ class Tool:
         totalTimeInSignal = totalDistanceInSignal / droneSpeed
         average = average / count
         return totalDistanceInSignal, totalTimeInSignal, signalCrossings, average
+    
 
+    def writeMetricsMessages(self, header: str, totalDistanceInSignal, totalTimeInSignal, signalCrossings):
+        arcpy.AddMessage(header)
+        arcpy.AddMessage(f"Total autoDistance in signal: {totalDistanceInSignal} m")
+        arcpy.AddMessage(f"Total time in signal: {totalTimeInSignal} s")
+        arcpy.AddMessage(f"Signal crossings: {signalCrossings}")
+
+#Method, which uses a star path-finding algorithm to find the best path considering the signal strenght, distance from the start and end.
 def a_star(grid, start, end, weight, resolution, origin):
     rows, cols = grid.shape
     open_set = []
@@ -408,6 +435,8 @@ def a_star(grid, start, end, weight, resolution, origin):
             continue
         visited.add(current)
 
+
+
         if current == end:
             # Reconstruct path
             path = []
@@ -423,6 +452,7 @@ def a_star(grid, start, end, weight, resolution, origin):
         ]
 
         for neighbor in neighbors:
+
             if (
                 0 <= neighbor[0] < rows
                 and 0 <= neighbor[1] < cols 
@@ -435,7 +465,7 @@ def a_star(grid, start, end, weight, resolution, origin):
 
     return None  # No path found
 
-
+#Method used to update the score of chosen points, calculates the distance from parent g, full score f which is g + distance from end to point.
 def update_vertex(current, neighbor, g_score, parent, open_set, finish, grid, f_score, weight, resolution, origin):
     new_g = g_score[current] + 1
     new_f =  new_g + euclidian(finish,neighbor, resolution, origin) + weight*detectionCost(grid[neighbor])
@@ -448,6 +478,7 @@ def update_vertex(current, neighbor, g_score, parent, open_set, finish, grid, f_
             heapq.heapify(open_set)
         heapq.heappush(open_set, (f_score[neighbor], neighbor))
 
+#Method used to remove unneeded points, smooth out the path as much as possible.
 def pathSmoothing(path, grid):
     parentIndex = 0
     resultPath = []
@@ -459,16 +490,19 @@ def pathSmoothing(path, grid):
     resultPath.append(path[len(path)-1])
     return resultPath
 
-
+#Method that determines if you can draw a line between to points. Uses modified bresenham's line algorithm.
 def line_of_sight(point1, point2, grid):
+
     if(grid[point1]<grid[point2]):
         return False
     
+
     x0, y0 = point1
     x1, y1 = point2
 
     gridValue = grid[(x0,y0)]
-   
+
+    
     dx = abs(x1 - x0)
     dy = -abs(y1 - y0)
 
@@ -477,6 +511,7 @@ def line_of_sight(point1, point2, grid):
     sY = 1 if y1 > y0 else -1
 
     err = dx + dy #if dx > dy else dy - dx
+
 
     while x0!=x1 or y0!=y1:
         if 2*err - dy> dx - 2 * err:
@@ -492,11 +527,13 @@ def line_of_sight(point1, point2, grid):
 
     return True
 
-#manhattan distance
 def heuristic(a, b):
+# Manhattan autoDistance
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
+#Euclidian distance formula
 def euclidian(a, b, resolution, origin):
+
     rasterOriginX, rasterOriginY = origin
 
     #True coordinates
@@ -505,8 +542,10 @@ def euclidian(a, b, resolution, origin):
     y0 = ((a[1] + 0.5) * resolution) + rasterOriginY
     y1 = ((b[1] + 0.5) * resolution) + rasterOriginY
 
+
     return ((x1-x0)**2 + (y1-y0)**2) ** 0.5
 
+#Method used to find the portion of penalty to apply to the score of point in radar field.
 def detectionCost(fieldStrength):
     return (fieldStrength+111)/111
 
@@ -523,3 +562,5 @@ def interpolatePoints(point1, point2, interval: int):
         for i in range(1, numSamples + 1)
     ]
     return points
+
+
