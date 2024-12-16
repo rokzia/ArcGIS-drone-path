@@ -148,7 +148,6 @@ class Tool:
         """This method takes place after outputs are processed and
         added to the display."""
         return
-    
 
     def radarValueArray(self, start, end):
         array = arcpy.RasterToNumPyArray(self.radar, nodata_to_value=-111)
@@ -194,16 +193,13 @@ class Tool:
         rasterOriginX = self.radar.extent.XMin
         rasterOriginY = self.radar.extent.YMax 
         
-
         col = int((point.X - rasterOriginX) / self.resolution)
         row = int((rasterOriginY - point.Y) / self.resolution)-1
         
-        # arcpy.AddMessage(f"Is {(point.X ,point.Y)} paverte i {(col, row)}")
         return row, col
     
     #drone speed in meters per second
     def calculateRouteMetrics(self, radarValues: arcpy.Array, path: arcpy.Polyline, droneSpeed: float):
-
         totalDistanceInSignal = 0
         totalTimeInSignal = 0
         signalCrossings = 0
@@ -214,7 +210,6 @@ class Tool:
         with arcpy.da.SearchCursor(intersectLines, ["SHAPE@", "Shape_Length"]) as cursor:
             for row in cursor:
                 totalDistanceInSignal+=row[1]
-
 
         lineStartPoints = arcpy.management.FeatureVerticesToPoints(intersectLines,'point_test', 'START')
         signalCrossings = arcpy.management.GetCount(lineStartPoints)
@@ -239,8 +234,6 @@ def a_star(grid, start, end, weight, resolution, origin):
         if current in visited:
             continue
         visited.add(current)
-
-
 
         if current == end:
             # Reconstruct path
@@ -283,8 +276,6 @@ def update_vertex(current, neighbor, g_score, parent, open_set, finish, grid, f_
             heapq.heapify(open_set)
         heapq.heappush(open_set, (f_score[neighbor], neighbor))
         
-
-
 def pathSmoothing(path, grid):
     parentIndex = 0
     resultPath = []
@@ -296,20 +287,16 @@ def pathSmoothing(path, grid):
     resultPath.append(path[len(path)-1])
     return resultPath
 
-
 #Method used to find if there exists a line between two points that meets a criteria
 def line_of_sight(point1, point2, grid):
-
     if(grid[point1]<grid[point2]):
         return False
-    
 
     x0, y0 = point1
     x1, y1 = point2
 
     gridValue = grid[(x0,y0)]
-
-    
+  
     dx = abs(x1 - x0)
     dy = -abs(y1 - y0)
 
@@ -318,7 +305,6 @@ def line_of_sight(point1, point2, grid):
     sY = 1 if y1 > y0 else -1
 
     err = dx + dy #if dx > dy else dy - dx
-
 
     while x0!=x1 or y0!=y1:
         if 2*err - dy> dx - 2 * err:
@@ -334,8 +320,6 @@ def line_of_sight(point1, point2, grid):
 
     return True
 
-
-
 def heuristic(a, b, resolution, origin):
 
     rasterOriginX, rasterOriginY = origin
@@ -346,7 +330,6 @@ def heuristic(a, b, resolution, origin):
 
 
     return ((x1-x0)**2 + (y1-y0)**2) ** 0.5
-
 
 def detectionCost(fieldStrength):
     return (fieldStrength+111)/111
