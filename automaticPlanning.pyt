@@ -186,7 +186,8 @@ class Tool:
             tempPoint = arcpy.Point(tempX,tempY)
             pointArray.add(tempPoint)
             prevY, prevX = path[i]
-        
+
+        pointArray.add(end)
         return pointArray
 
     def snapPointToRasterCenter(self, point: arcpy.Point):
@@ -241,13 +242,13 @@ def a_star(grid, start, end, weight, resolution, origin):
             while current != came_from[current]:
                 path.append(current)
                 current = came_from[current]
-            return pathSmoothing(path[::-1],grid)
+            path = pathSmoothing(path[::-1],grid)
+            return pathSmoothing(path,grid)
 
         # Explore neighbors
         neighbors = [
             (current[0] + dx, current[1] + dy)
             for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (1,1), (-1,-1), (-1,1), (1,-1)]
-            # for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
         ]
 
         for neighbor in neighbors:
@@ -265,7 +266,7 @@ def a_star(grid, start, end, weight, resolution, origin):
     return None  # No path found
 
 def update_vertex(current, neighbor, g_score, parent, open_set, finish, grid, f_score, weight, resolution, origin):
-    new_g = g_score[current] + 1#heuristic(current,neighbor, resolution, origin)
+    new_g = g_score[current] + 1
     new_f =  new_g + heuristic(finish,neighbor, resolution, origin) + weight*detectionCost(grid[neighbor])
     if new_f < f_score[neighbor]:
         g_score[neighbor] = new_g
@@ -307,7 +308,7 @@ def line_of_sight(point1, point2, grid):
     err = dx + dy #if dx > dy else dy - dx
 
     while x0!=x1 or y0!=y1:
-        if 2*err - dy> dx - 2 * err:
+        if err - dy > dx - err:
             err+=dy
             x0+=sX
         else:
