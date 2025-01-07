@@ -223,10 +223,10 @@ class Tool:
 def a_star(grid, start, end, weight, resolution, origin):
     rows, cols = grid.shape
     open_set = []
-    heapq.heappush(open_set, (0, start))  # (f, node)
+    heapq.heappush(open_set, (heuristic(start,end, resolution, origin)+detectionCost(grid[start]), start))  # (f, node)
     came_from = {start: start}
     g_score = {start: 0}
-    f_score = {start: heuristic(start,end, resolution, origin)}
+    f_score = {start: heuristic(start,end, resolution, origin)+detectionCost(grid[start])}
     visited = set()
 
     while open_set:
