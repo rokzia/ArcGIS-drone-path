@@ -6,9 +6,10 @@ Kiekviena koordinatė turi savo „kainą“. Šią nustatome prie prieš tai mi
 Susiję metodai kode:
 a_star – kelio radimo algoritmas,
 update_vertex – koordinačių „kainos“ skaičiavimas
+heuristic - euklidinis atstumas
 
 Radę koordinates, kelią taipogi bandome „išlyginti“. Pasinaudodami  Bresenhamo linijos algoritmu (bresenham's line algorithm), tikriname ar koordinatės radaro stipris nėra didesnis nei linijos algoritmo vykdymo metu rastos mažiausios reikšmės. Kol tai nenutinka, šaliname tarpinius taškus ir gauname greitesnį bei įvairių kampų kelią. 
 
 Susiję metodai kode:
 line_of_sight - Bresenhamo linijos algoritmas
-
+pathSmoothing - taškų naikinimo metodas
